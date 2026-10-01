@@ -26,7 +26,7 @@ pre{background:var(--bg);padding:10px;border-radius:8px;overflow:auto;font-size:
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script>
-const SUPABASE_URL='https://voxdeckpjnwjygfhlpox.supabase.co',SUPABASE_KEY='PASTE-ANON-KEY-HERE'; /* paste your anon / publishable key between the quotes. NEVER the secret or service_role key */
+const SUPABASE_URL='https://voxdeckpjnwjygfhlpox.supabase.co',SUPABASE_KEY='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZveGRlY2twam53anlnZmhscG94Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTA4MDg3NzUsImV4cCI6MjEwNjM4NDc3NX0.cmVyqBHU4GTFurzPBiQYyJZxXZHvpN7jcu68dahhduE'; /* paste your anon / publishable key between the quotes. NEVER the secret or service_role key */
 const SB=()=>SUPABASE_KEY.length>40?{on:1,url:SUPABASE_URL,key:SUPABASE_KEY}:C().sb;
 const $=q=>document.querySelector(q),LS='cbstaff1',pad=n=>String(n).padStart(2,'0'),gbp=x=>'£'+(+x).toLocaleString('en-GB',{minimumFractionDigits:2,maximumFractionDigits:2});
 const iso=d=>d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate()),add=(d,n)=>{d=new Date(d);d.setDate(d.getDate()+n);return d},mon=d=>{d=new Date(d);d.setHours(0,0,0,0);return add(d,-((d.getDay()+6)%7))};
