@@ -27,7 +27,7 @@ pre{background:var(--bg);padding:10px;border-radius:8px;overflow:auto;font-size:
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script>
 const SUPABASE_URL='https://voxdeckpjnwjygfhlpox.supabase.co',SUPABASE_KEY='PASTE-ANON-KEY-HERE'; /* paste your anon / publishable key between the quotes. NEVER the secret or service_role key */
-const SB=()=>C().sb.key?C().sb:CFG0.sb;
+const SB=()=>SUPABASE_KEY.length>40?{on:1,url:SUPABASE_URL,key:SUPABASE_KEY}:C().sb;
 const $=q=>document.querySelector(q),LS='cbstaff1',pad=n=>String(n).padStart(2,'0'),gbp=x=>'£'+(+x).toLocaleString('en-GB',{minimumFractionDigits:2,maximumFractionDigits:2});
 const iso=d=>d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate()),add=(d,n)=>{d=new Date(d);d.setDate(d.getDate()+n);return d},mon=d=>{d=new Date(d);d.setHours(0,0,0,0);return add(d,-((d.getDay()+6)%7))};
 const fdt=d=>new Date(typeof d=='string'&&d.length==10?d+'T00:00':d).toLocaleDateString('en-GB',{day:'numeric',month:'short'}),ftm=d=>new Date(d).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}),uid=()=>Math.random().toString(36).slice(2,10),esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -97,7 +97,7 @@ const g=base+hol+ot,A=g*pp,t=c.tax,tax=(Math.max(0,Math.min(A,t.band)-t.pa)*t.r1
 return{lbl,hrs,base,hol,ot,g,tax:c.feat.tax?tax:0,ni:c.feat.tax?ni:0,pen,net:g-(c.feat.tax?tax+ni:0)-pen}}
 /* ===== UI ===== */
 const A=h=>$('#app').innerHTML=h;
-function login(){initSB();const cloud=!!sb;A(`<div class=lgn>${brand(1)}<p class=mu style="text-align:center">${cloud?'Sign in with your 4-digit ID and 6-digit password':'Local demo: manager ID 1000, password 000000'}</p><input id=lid inputmode=numeric maxlength=4 placeholder="4-digit ID" autocomplete=username><input id=pw type=password inputmode=numeric maxlength=6 placeholder="6-digit password" autocomplete=current-password><button onclick="${cloud?'cloudIn()':'localIn()'}">Sign in</button>${cloud?`<a class=mu onclick="cloudIn(1)">First-time manager setup</a>`:''}<a class=mu onclick=setup()>⚙ Connect Supabase (cloud sync)</a></div>`)}
+function login(){initSB();const cloud=!!sb;A(`<div class=lgn>${brand(1)}<p class=mu style="text-align:center">${cloud?'Sign in with your 4-digit ID and 6-digit password':'Local demo: manager ID 1000, password 000000'}</p><input id=lid inputmode=numeric maxlength=4 placeholder="4-digit ID" autocomplete=username><input id=pw type=password inputmode=numeric maxlength=6 placeholder="6-digit password" autocomplete=current-password><button onclick="${cloud?'cloudIn()':'localIn()'}">Sign in</button>${cloud?`<a class=mu onclick="cloudIn(1)">First-time manager setup</a>`:''}${SUPABASE_KEY.length>40?'':`<a class=mu onclick=setup()>⚙ Connect Supabase (cloud sync)</a>`}</div>`)}
 function localIn(){const s=staff().find(x=>x.lid==$('#lid').value.trim()&&x.pin==$('#pw').value);if(!s)return toast('Wrong ID or password');start(s,0)}
 const synth=id=>id+'@'+(C().dom||'cbstaff.app'),newId=()=>{let i;do{i=String(1000+Math.floor(Math.random()*9000))}while(staff().some(x=>x.lid==i));return i};
 async function cloudIn(up){const id=$('#lid').value.trim(),p=$('#pw').value;if(!/^\d{4}$/.test(id)||!/^\d{6}$/.test(p))return toast('ID is 4 digits, password is 6 digits');const e=synth(id),r=await(up?sb.auth.signUp({email:e,password:p}):sb.auth.signInWithPassword({email:e,password:p}));if(r.error)return toast(r.error.message);
