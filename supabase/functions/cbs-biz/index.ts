@@ -56,7 +56,12 @@ Deno.serve(async (req) => {
   if (ADMIN.length < 20) return err("ADMIN_KEY secret is missing or too short", 500);
   let q: any;
   try { q = await req.json(); } catch { return err("bad request"); }
-  try { return await route(q); } catch (e) { console.error(e); return err("server error", 500); }
+  try { return await route(q); } catch (e) {
+    console.error(e);
+    // The real reason is shown only to someone holding the ADMIN_KEY.
+    const m = (e as any)?.message || JSON.stringify(e);
+    return err(same(String(q.admin || ""), ADMIN) ? "server error: " + m : "server error", 500);
+  }
 });
 
 async function route(q: any) {
@@ -127,7 +132,8 @@ async function info(q: any) {
 /* ---------- admin (needs ADMIN_KEY) ---------- */
 async function adminOp(q: any) {
   if (q.a === "list") {
-    const { data } = await db.from("cbs_biz").select("id,name,active,created_at").order("created_at", { ascending: false });
+    const { data, error } = await db.from("cbs_biz").select("id,name,active,created_at").order("created_at", { ascending: false });
+    if (error) throw error;
     return out({ list: data || [] });
   }
   if (q.a === "create") {
