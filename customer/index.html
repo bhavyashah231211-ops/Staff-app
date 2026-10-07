@@ -1,0 +1,23 @@
+<!DOCTYPE html><html lang="en-GB"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#0a0a0f"><title>Welcome</title>
+<style>
+:root{--bg:#0a0a0f;--c:#1e1e2e;--bd:#2a2a40;--ac:#ff6b35;--tx:#eceaf5;--mu:#8b8aa5}
+*{box-sizing:border-box;margin:0}body{background:var(--bg);color:var(--tx);font:16px system-ui,sans-serif;min-height:100vh;display:grid;place-items:center;padding:20px}
+.card{background:var(--c);border:1px solid var(--bd);border-radius:16px;padding:28px 22px;max-width:420px;width:100%;text-align:center}
+img{max-width:80%;max-height:110px;object-fit:contain;margin-bottom:14px}h1{font:400 34px Impact,sans-serif;letter-spacing:1px}
+.tb{display:inline-block;margin-top:12px;background:#ff6b3522;color:var(--ac);border-radius:20px;padding:4px 14px;font-weight:700}
+p{color:var(--mu);margin-top:14px;font-size:14px}.f{margin-top:22px;font-size:11px;color:var(--mu)}
+</style></head><body><div class="card" id="c"><p>Loading…</p></div>
+<script>
+/* ===== CONFIG: your Supabase project (the anon key is public by design) ===== */
+const FN='https://hrnrmojaaxyfmdnmsokc.supabase.co/functions/v1/cbs-biz';
+const ANON=''; /* optional: paste the anon key of the NEW project; the function works without it */
+/* ============================================================================ */
+const esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const P=new URLSearchParams(location.search),b=(P.get('b')||'').toLowerCase().replace(/[^a-z0-9-]/g,''),t=(P.get('t')||'').replace(/[^\w -]/g,'').slice(0,12);
+const c=document.getElementById('c');
+if(!b)c.innerHTML='<p>This link is incomplete. Please scan the venue QR code again.</p>';
+else fetch(FN,{method:'POST',headers:{'Content-Type':'application/json',...(ANON?{apikey:ANON}:{})},body:JSON.stringify({a:'info',b})})
+ .then(r=>r.ok?r.json():Promise.reject()).then(v=>{document.title=v.name;
+  c.innerHTML=(v.logo?`<img src="${esc(v.logo)}" alt="">`:'')+`<h1>${esc(v.name)}</h1>${t?`<div class=tb>Table ${esc(t)}</div>`:''}<p>Welcome! Online booking and table ordering will appear here once your venue switches them on.</p><div class=f>Powered by CBSystem</div>`})
+ .catch(()=>c.innerHTML='<p>Sorry, this venue could not be found.</p>');
+</script></body></html>

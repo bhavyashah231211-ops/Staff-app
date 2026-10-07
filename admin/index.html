@@ -1,0 +1,61 @@
+<!DOCTYPE html><html lang="en-GB"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><title>Clock Admin</title>
+<style>
+:root{--bg:#0a0a0f;--c:#1e1e2e;--c2:#252538;--bd:#2a2a40;--ac:#ff6b35;--gr:#2dd4a0;--rd:#ff4560;--tx:#eceaf5;--mu:#8b8aa5}
+*{box-sizing:border-box;margin:0}body{background:var(--bg);color:var(--tx);font:14px system-ui,sans-serif;padding:14px}
+main{max-width:760px;margin:auto}h1{font:400 30px Impact,sans-serif;letter-spacing:1px;margin-bottom:12px}h1 b{color:var(--ac)}h2{font:400 22px Impact,sans-serif;letter-spacing:1px;margin:0 0 10px}
+.card{background:var(--c);border:1px solid var(--bd);border-radius:12px;padding:14px;margin-bottom:12px}
+input{background:var(--c2);color:var(--tx);border:1px solid var(--bd);border-radius:8px;padding:10px;font:inherit;width:100%;margin-bottom:8px}
+button{background:var(--ac);color:#fff;border:0;border-radius:8px;padding:9px 14px;font:inherit;font-weight:700;cursor:pointer}button.s{background:var(--c2);color:var(--tx)}button.sm{padding:5px 9px;font-size:12px}
+.mu{color:var(--mu);font-size:12px}table{width:100%;border-collapse:collapse}td{padding:8px 4px;border-bottom:1px solid var(--bd);vertical-align:middle}.tw{overflow-x:auto}
+textarea{width:100%;height:230px;background:var(--bg);color:var(--tx);border:1px solid var(--bd);border-radius:8px;padding:10px;font:12px ui-monospace,monospace;margin:8px 0}
+.row{display:flex;gap:12px;align-items:flex-start;flex-wrap:wrap}#qr{background:#fff;padding:8px;border-radius:8px;line-height:0}
+.off{color:var(--rd)}.on{color:var(--gr)}#t{position:fixed;left:50%;bottom:20px;transform:translateX(-50%);background:var(--gr);color:#04231a;padding:10px 16px;border-radius:10px;font-weight:700;opacity:0;transition:.3s;pointer-events:none}#t.v{opacity:1}#t.e{background:var(--rd);color:#fff}
+</style></head><body><main id="app"></main><div id="t"></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<script>
+/* ===== CONFIG: your Supabase project (the anon key is public by design) ===== */
+const FN='https://hrnrmojaaxyfmdnmsokc.supabase.co/functions/v1/cbs-biz';
+const ANON=''; /* optional: paste the anon key of the NEW project; the function works without it */
+/* ============================================================================ */
+const $=q=>document.querySelector(q),esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const BASE=location.href.split(/[?#]/)[0].replace(/admin\/(index\.html)?$/,'');
+const staffUrl=id=>BASE+'staff/?b='+encodeURIComponent(id),custUrl=id=>BASE+'customer/?b='+encodeURIComponent(id);
+let KEY=sessionStorage.cbsAdmin||'',LIST=[],NEW=null,RST=null,idEdited=false;
+function toast(m,bad){const t=$('#t');t.textContent=m;t.className='v'+(bad?' e':'');setTimeout(()=>t.className='',2600)}
+async function api(b){
+  const r=await fetch(FN,{method:'POST',headers:{'Content-Type':'application/json',...(ANON?{apikey:ANON}:{})},body:JSON.stringify({...b,admin:KEY})});
+  const j=await r.json().catch(()=>({}));if(!r.ok)throw new Error(j.error||'Error '+r.status);return j}
+const slug=s=>s.toLowerCase().replace(/&/g,'and').replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'').slice(0,38);
+const msg=n=>`Hi, your Clock app is ready.
+
+Business: ${n.name}
+Staff link: ${staffUrl(n.id)}
+Staff key (enter once on each phone): ${n.key}
+Owner PIN: ${n.owner}
+Manager PIN: ${n.manager}
+Customer link: ${custUrl(n.id)}
+
+First steps: open the staff link, enter the staff key, sign in as Owner with the Owner PIN, then change both PINs in Settings and set up your team.`;
+
+function view(){
+  if(!KEY)return $('#app').innerHTML=`<h1>CBSystem <b>Admin</b></h1><div class=card><input id=k type=password placeholder="ADMIN_KEY" autocomplete=current-password><button onclick=enter()>Enter</button></div>`;
+  $('#app').innerHTML=`<h1>CBSystem <b>Admin</b> <button class="s sm" style="float:right" onclick=exit()>Lock</button></h1>
+  <div class=card><h2>New business</h2><input id=nm placeholder="Business name" oninput="nameIn()"><input id=ni placeholder="id (used in the links)" oninput="idEdited=true"><button onclick=create()>Create</button><p class=mu style="margin-top:8px">Take payment or start their subscription first.</p></div>
+  ${NEW?`<div class=card><h2>Ready to send</h2><textarea id=mt readonly>${esc(msg(NEW))}</textarea><div class=row><button onclick=copyMsg()>Copy message</button><div id=qr></div><div class=mu>Customer QR<br>${esc(custUrl(NEW.id))}</div></div><p class=mu style="margin-top:8px">The staff key and PINs are shown once and cannot be looked up later. Use Reset below if lost.</p></div>`:''}
+  ${RST?`<div class=card><h2>New ${esc(RST.what)} for ${esc(RST.id)}</h2><p style="font-size:20px;word-break:break-all"><b>${esc(RST.value)}</b></p><button onclick="navigator.clipboard.writeText('${esc(RST.value)}');toast('Copied')">Copy</button><p class=mu style="margin-top:8px">Shown once.${RST.what=='key'?' Staff will be asked for the new key on their next sign-in.':''}</p></div>`:''}
+  <div class=card><h2>Businesses</h2><div class=tw><table>${LIST.map(b=>`<tr><td><b>${esc(b.name)}</b><div class=mu>${esc(b.id)} · <span class="${b.active?'on':'off'}">${b.active?'active':'disabled'}</span></div></td><td style="text-align:right;white-space:nowrap"><button class="s sm" onclick="cp('${esc(b.id)}')">Links</button> <button class="s sm" onclick="rs('${esc(b.id)}','key')">New key</button> <button class="s sm" onclick="rs('${esc(b.id)}','owner')">Owner PIN</button> <button class="s sm" onclick="rs('${esc(b.id)}','manager')">Mgr PIN</button> <button class="s sm" onclick="tg('${esc(b.id)}',${b.active?0:1})">${b.active?'Disable':'Enable'}</button></td></tr>`).join('')||'<tr><td class=mu>None yet</td></tr>'}</table></div></div>`;
+  if(NEW)new QRCode($('#qr'),{text:custUrl(NEW.id),width:150,height:150})}
+async function enter(){KEY=$('#k').value.trim();try{await load();sessionStorage.cbsAdmin=KEY;view()}catch(e){KEY='';toast(e.message,1)}}
+function exit(){KEY='';NEW=RST=null;sessionStorage.removeItem('cbsAdmin');view()}
+async function load(){LIST=(await api({a:'list'})).list}
+function nameIn(){if(!idEdited)$('#ni').value=slug($('#nm').value)}
+async function create(){const name=$('#nm').value.trim(),id=$('#ni').value.trim();if(!name)return toast('Enter the business name',1);
+  try{NEW=await api({a:'create',name,id});RST=null;idEdited=false;await load();view();toast('Created')}catch(e){toast(e.message,1)}}
+function copyMsg(){navigator.clipboard.writeText($('#mt').value);toast('Message copied')}
+async function rs(id,what){if(!confirm('Reset the '+what+' for '+id+'? The old one stops working immediately.'))return;
+  try{RST=await api({a:'reset',id,what});NEW=null;view();window.scrollTo(0,0)}catch(e){toast(e.message,1)}}
+async function tg(id,active){if(!active&&!confirm('Disable '+id+'? Nobody there can sign in until you enable it again.'))return;
+  try{await api({a:'toggle',id,active});await load();view()}catch(e){toast(e.message,1)}}
+function cp(id){navigator.clipboard.writeText('Staff link: '+staffUrl(id)+'\nCustomer link: '+custUrl(id));toast('Links copied')}
+(async()=>{if(KEY){try{await load()}catch(e){KEY='';sessionStorage.removeItem('cbsAdmin')}}view()})();
+</script></body></html>
