@@ -10,6 +10,8 @@ const BIZ=(P.get('b')||localStorage.cbs_biz||'').toLowerCase().replace(/[^a-z0-9
 if(P.get('b')&&BIZ)localStorage.cbs_biz=BIZ;
 const KEYK='cbs_key_'+BIZ;
 let TOK=null,INFO=null,NAME='';
+/* lets the main page know a session is active, so auto-sync runs */
+window.cbsLive=()=>!!TOK;
 
 /* never show another business's cached data */
 const blank=()=>({cfg:{...CFG0,code:BIZ,sb:{on:0,url:'',key:''}},rows:[]});
@@ -45,7 +47,7 @@ rm=function(id){
 mail=async function(sl){
   const c=C().mail,pdf=c.attach?slipPdf(sl).split(',')[1]:null,
   html=`<p>Hi ${esc(sl.name.split(' ')[0])},</p><p>Your payslip for ${esc(sl.lbl)} is ready${pdf?' (attached)':''}. Net pay: <b>${gbp(sl.net)}</b>.</p><p>You can download it any time in Clock under Pay.</p>`;
-  await call({a:'mail',token:TOK,to:sl.pe,subject:'Your payslip: '+sl.lbl,html,pdf,name:'payslip-'+sl.lbl.replace(/\W+/g,'-')+'.pdf'})};
+  await call({a:'mail',token:TOK,to:sl.pe,replyTo:(c.replyTo||'').trim()||undefined,subject:'Your payslip: '+sl.lbl,html,pdf,name:'payslip-'+sl.lbl.replace(/\W+/g,'-')+'.pdf'})};
 
 /* sign-in screens */
 function keyScreen(){
@@ -83,7 +85,7 @@ frame=function(){
   if(me.role=='m'&&!me.owner)document.querySelectorAll('.tabs a').forEach(a=>{if(a.textContent.trim()=='Settings')a.remove()});
   document.querySelectorAll('#v .card').forEach(c=>{
     const b=c.querySelector(':scope>b'),t=b?b.textContent:'';
-    if(/^(Database|Payslip emails|Security)/.test(t))c.remove();
+    if(/^(Database|Security)/.test(t))c.remove();
     if(/^Backup/.test(t))c.querySelectorAll('button,input').forEach(x=>{if(/^(Import|Reset demo)/.test(x.textContent)||x.id=='imp')x.remove()});
     if(/^Venue/.test(t))c.querySelectorAll('.f').forEach(f=>{if(/^(Login email domain|Venue code)/.test(f.textContent))f.remove()})})};
 
