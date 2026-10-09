@@ -88,3 +88,4 @@ async function dl(id){const t=prompt('This PERMANENTLY deletes "'+id+'" and all 
   try{await api({a:'delete',id});if(LNK==id)LNK=null;await load();view();toast('Deleted')}catch(e){toast(e.message,1)}}
 (async()=>{if(KEY){try{await load();startPoll()}catch(e){KEY='';sessionStorage.removeItem('cbsAdmin')}}view()})();
 </script></body></html>
+Admin: auto refresh
