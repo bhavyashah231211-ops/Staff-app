@@ -10,17 +10,19 @@ button{background:var(--ac);color:#fff;border:0;border-radius:8px;padding:9px 14
 textarea{width:100%;height:230px;background:var(--bg);color:var(--tx);border:1px solid var(--bd);border-radius:8px;padding:10px;font:12px ui-monospace,monospace;margin:8px 0}
 .row{display:flex;gap:12px;align-items:flex-start;flex-wrap:wrap}#qr{background:#fff;padding:8px;border-radius:8px;line-height:0}
 .off{color:var(--rd)}.on{color:var(--gr)}#t{position:fixed;left:50%;bottom:20px;transform:translateX(-50%);background:var(--gr);color:#04231a;padding:10px 16px;border-radius:10px;font-weight:700;opacity:0;transition:.3s;pointer-events:none}#t.v{opacity:1}#t.e{background:var(--rd);color:#fff}
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--gr);margin-right:5px}.dot.x{background:var(--rd)}
 </style></head><body><main id="app"></main><div id="t"></div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <script>
 /* ===== CONFIG: your Supabase project (the anon key is public by design) ===== */
 const FN='https://hrnrmojaaxyfmdnmsokc.supabase.co/functions/v1/cbs-biz';
 const ANON=''; /* optional: paste the anon key of the NEW project; the function works without it */
+const POLL_MS=4000; /* how often the list auto-refreshes (ms) */
 /* ============================================================================ */
 const $=q=>document.querySelector(q),esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const BASE=location.href.split(/[?#]/)[0].replace(/admin\/(index\.html)?$/,'');
 const staffUrl=id=>BASE+'staff/?b='+encodeURIComponent(id),custUrl=id=>BASE+'customer/?b='+encodeURIComponent(id);
-let KEY=sessionStorage.cbsAdmin||'',LIST=[],NEW=null,RST=null,LNK=null,idEdited=false;
+let KEY=sessionStorage.cbsAdmin||'',LIST=[],NEW=null,RST=null,LNK=null,idEdited=false,pollT=null,syncing=false,online=true;
 function toast(m,bad){const t=$('#t');t.textContent=m;t.className='v'+(bad?' e':'');setTimeout(()=>t.className='',2600)}
 async function api(b){
   const r=await fetch(FN,{method:'POST',headers:{'Content-Type':'application/json',...(ANON?{apikey:ANON}:{})},body:JSON.stringify({...b,admin:KEY})});
@@ -37,6 +39,10 @@ Customer link: ${custUrl(n.id)}
 
 First steps: open the staff link, enter the staff key, sign in as Owner with the Owner PIN, then change both PINs in Settings and set up your team.`;
 
+function listHtml(){
+  return `<table>${LIST.map(b=>`<tr><td><b>${esc(b.name)}</b><div class=mu>${esc(b.id)} · <span class="${b.active?'on':'off'}">${b.active?'active':'disabled'}</span></div></td><td style="text-align:right;white-space:nowrap"><button class="s sm" onclick="sl('${esc(b.id)}')">Links</button> <button class="s sm" onclick="rs('${esc(b.id)}','key')">New key</button> <button class="s sm" onclick="rs('${esc(b.id)}','owner')">Owner PIN</button> <button class="s sm" onclick="rs('${esc(b.id)}','manager')">Mgr PIN</button> <button class="s sm" onclick="tg('${esc(b.id)}',${b.active?0:1})">${b.active?'Disable':'Enable'}</button> <button class="sm" style="background:var(--rd)" onclick="dl('${esc(b.id)}')">Delete</button></td></tr>`).join('')||'<tr><td class=mu>None yet</td></tr>'}</table>`}
+function statusHtml(){return `<span class="dot${online?'':' x'}"></span>${online?'Live · updated '+new Date().toLocaleTimeString('en-GB'):'Offline · retrying'}`}
+
 function view(){
   if(!KEY)return $('#app').innerHTML=`<h1>CBSystem <b>Admin</b></h1><div class=card><input id=k type=password placeholder="ADMIN_KEY" autocomplete=current-password><button onclick=enter()>Enter</button></div>`;
   $('#app').innerHTML=`<h1>CBSystem <b>Admin</b> <button class="s sm" style="float:right" onclick=exit()>Lock</button></h1>
@@ -44,15 +50,30 @@ function view(){
   ${NEW?`<div class=card><h2>Ready to send</h2><textarea id=mt readonly>${esc(msg(NEW))}</textarea><div class=row><button onclick=copyMsg()>Copy message</button><div id=qr></div><div class=mu>Customer QR<br>${esc(custUrl(NEW.id))}</div></div><p class=mu style="margin-top:8px">The staff key and PINs are shown once and cannot be looked up later. Use Reset below if lost.</p></div>`:''}
   ${RST?`<div class=card><h2>New ${esc(RST.what)} for ${esc(RST.id)}</h2><p style="font-size:20px;word-break:break-all"><b>${esc(RST.value)}</b></p><button onclick="navigator.clipboard.writeText('${esc(RST.value)}');toast('Copied')">Copy</button><p class=mu style="margin-top:8px">Shown once.${RST.what=='key'?' Staff will be asked for the new key on their next sign-in.':''}</p></div>`:''}
   ${LNK?linksCard():''}
-  <div class=card><h2>Businesses</h2><div class=tw><table>${LIST.map(b=>`<tr><td><b>${esc(b.name)}</b><div class=mu>${esc(b.id)} · <span class="${b.active?'on':'off'}">${b.active?'active':'disabled'}</span></div></td><td style="text-align:right;white-space:nowrap"><button class="s sm" onclick="sl('${esc(b.id)}')">Links</button> <button class="s sm" onclick="rs('${esc(b.id)}','key')">New key</button> <button class="s sm" onclick="rs('${esc(b.id)}','owner')">Owner PIN</button> <button class="s sm" onclick="rs('${esc(b.id)}','manager')">Mgr PIN</button> <button class="s sm" onclick="tg('${esc(b.id)}',${b.active?0:1})">${b.active?'Disable':'Enable'}</button> <button class="sm" style="background:var(--rd)" onclick="dl('${esc(b.id)}')">Delete</button></td></tr>`).join('')||'<tr><td class=mu>None yet</td></tr>'}</table></div></div>`;
+  <div class=card><h2>Businesses <span class=mu id=ls style="float:right;font:12px system-ui">${statusHtml()}</span></h2><div class=tw id=bl>${listHtml()}</div></div>`;
   if(NEW)new QRCode($('#qr'),{text:custUrl(NEW.id),width:150,height:150});
   if(LNK)new QRCode($('#qr2'),{text:custUrl(LNK),width:150,height:150})}
 function linksCard(){const b=LIST.find(x=>x.id==LNK)||{id:LNK,name:LNK},u1=staffUrl(b.id),u2=custUrl(b.id);
   return`<div class=card><h2>${esc(b.name)} <button class="s sm" style="float:right" onclick="LNK=null;view()">Close</button></h2><p class=mu>Staff link (Clock)</p><p style="word-break:break-all"><a href="${esc(u1)}" target=_blank style="color:var(--ac)">${esc(u1)}</a></p><button class="s sm" onclick="navigator.clipboard.writeText('${esc(u1)}');toast('Copied')">Copy staff link</button>
   <p class=mu style="margin-top:12px">Customer link</p><p style="word-break:break-all"><a href="${esc(u2)}" target=_blank style="color:var(--ac)">${esc(u2)}</a></p><div class=row><button class="s sm" onclick="navigator.clipboard.writeText('${esc(u2)}');toast('Copied')">Copy customer link</button><div id=qr2></div></div>
   <p class=mu style="margin-top:10px">The staff key and PINs are stored hashed and cannot be shown again. If lost, use New key / Owner PIN / Mgr PIN in the list below.</p></div>`}
-async function enter(){KEY=$('#k').value.trim();try{await load();sessionStorage.cbsAdmin=KEY;view()}catch(e){KEY='';toast(e.message,1)}}
-function exit(){KEY='';NEW=RST=null;sessionStorage.removeItem('cbsAdmin');view()}
+
+/* ---- auto sync: refreshes only the business list, so typing / open cards are never wiped ---- */
+function paintList(){const el=$('#bl');if(el)el.innerHTML=listHtml();const s=$('#ls');if(s)s.innerHTML=statusHtml()}
+async function sync(force){
+  if(!KEY||syncing||(document.hidden&&!force))return;
+  syncing=true;
+  try{const prev=JSON.stringify(LIST);await load();online=true;if(force||JSON.stringify(LIST)!==prev)paintList();else{const s=$('#ls');if(s)s.innerHTML=statusHtml()}}
+  catch(e){online=false;const s=$('#ls');if(s)s.innerHTML=statusHtml()}
+  syncing=false}
+function startPoll(){stopPoll();pollT=setInterval(()=>sync(),POLL_MS)}
+function stopPoll(){if(pollT){clearInterval(pollT);pollT=null}}
+document.addEventListener('visibilitychange',()=>{if(!document.hidden)sync(true)});
+window.addEventListener('online',()=>sync(true));
+window.addEventListener('focus',()=>sync(true));
+
+async function enter(){KEY=$('#k').value.trim();try{await load();sessionStorage.cbsAdmin=KEY;view();startPoll()}catch(e){KEY='';toast(e.message,1)}}
+function exit(){KEY='';NEW=RST=null;stopPoll();sessionStorage.removeItem('cbsAdmin');view()}
 async function load(){LIST=(await api({a:'list'})).list}
 function nameIn(){if(!idEdited)$('#ni').value=slug($('#nm').value)}
 async function create(){const name=$('#nm').value.trim(),id=$('#ni').value.trim();if(!name)return toast('Enter the business name',1);
@@ -61,9 +82,9 @@ function copyMsg(){navigator.clipboard.writeText($('#mt').value);toast('Message 
 async function rs(id,what){if(!confirm('Reset the '+what+' for '+id+'? The old one stops working immediately.'))return;
   try{RST=await api({a:'reset',id,what});NEW=null;view();window.scrollTo(0,0)}catch(e){toast(e.message,1)}}
 async function tg(id,active){if(!active&&!confirm('Disable '+id+'? Nobody there can sign in until you enable it again.'))return;
-  try{await api({a:'toggle',id,active});await load();view()}catch(e){toast(e.message,1)}}
+  try{await api({a:'toggle',id,active});await load();paintList()}catch(e){toast(e.message,1)}}
 function sl(id){LNK=id;NEW=RST=null;view();window.scrollTo(0,0)}
 async function dl(id){const t=prompt('This PERMANENTLY deletes "'+id+'" and all its staff, clock records, holidays and payslips.\n\nType the id to confirm:');if(t!==id)return toast('Cancelled',1);
   try{await api({a:'delete',id});if(LNK==id)LNK=null;await load();view();toast('Deleted')}catch(e){toast(e.message,1)}}
-(async()=>{if(KEY){try{await load()}catch(e){KEY='';sessionStorage.removeItem('cbsAdmin')}}view()})();
+(async()=>{if(KEY){try{await load();startPoll()}catch(e){KEY='';sessionStorage.removeItem('cbsAdmin')}}view()})();
 </script></body></html>
