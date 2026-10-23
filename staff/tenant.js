@@ -1,6 +1,7 @@
 /* Clock (staff app): multi-tenant layer.
    Loaded as the LAST script in staff/index.html. It replaces local/Supabase-auth storage with the cbs-biz edge function.
-   Business comes from the link: /staff/?b=<business-id>. Sign-in = staff key (once per device) + ID/PIN. */
+   Business comes from the link: /staff/?b=<business-id>. Sign-in = staff key (once per device) + ID/PIN.
+   NEW: Settings > "Send payslips from your own email" (owner connects their own mailbox, saved on the server). */
 (()=>{
 const URL0='https://hrnrmojaaxyfmdnmsokc.supabase.co',ANON='';/* ANON optional: anon key of the NEW project */
 const FN=URL0+'/functions/v1/cbs-biz';
@@ -10,6 +11,7 @@ const BIZ=(P.get('b')||localStorage.cbs_biz||'').toLowerCase().replace(/[^a-z0-9
 if(P.get('b')&&BIZ)localStorage.cbs_biz=BIZ;
 const KEYK='cbs_key_'+BIZ;
 let TOK=null,INFO=null,NAME='';
+let MB,MBL=0;/* MB: undefined = not loaded yet, null = no mailbox saved, object = saved mailbox (never contains the password) */
 /* lets the main page know a session is active, so auto-sync runs */
 window.cbsLive=()=>!!TOK;
 
@@ -67,11 +69,11 @@ window.tLogin=async()=>{
   if(!/^\d{6}$/.test(pin))return toast('PIN is 6 digits');
   try{
     const j=await call({a:'login',b:BIZ,key:localStorage[KEYK],role,id,pin});
-    TOK=j.token;NAME=j.name;await pull();start(j.user,0)}
+    TOK=j.token;NAME=j.name;MB=undefined;await pull();start(j.user,0)}
   catch(e){
     if(/staff key/i.test(e.message)){localStorage.removeItem(KEYK);toast(e.message);return keyScreen()}
     toast(e.message)}};
-out=function(){TOK=null;me=null;INFO=null;D=blank();localStorage.removeItem(LS);login()};
+out=function(){TOK=null;me=null;INFO=null;MB=undefined;D=blank();localStorage.removeItem(LS);login()};
 
 /* Owner/Manager: Settings is owner-only; hide cloud/demo bits that don't apply */
 const F0=frame;
@@ -87,11 +89,53 @@ frame=function(){
     const b=c.querySelector(':scope>b'),t=b?b.textContent:'';
     if(/^(Database|Security)/.test(t))c.remove();
     if(/^Backup/.test(t))c.querySelectorAll('button,input').forEach(x=>{if(/^(Import|Reset demo)/.test(x.textContent)||x.id=='imp')x.remove()});
-    if(/^Venue/.test(t))c.querySelectorAll('.f').forEach(f=>{if(/^(Login email domain|Venue code)/.test(f.textContent))f.remove()})})};
+    if(/^Venue/.test(t))c.querySelectorAll('.f').forEach(f=>{if(/^(Login email domain|Venue code)/.test(f.textContent))f.remove()})});
+  /* owner on Settings: load the saved-mailbox status once, then redraw */
+  if(me.owner&&tab=='set'){
+    if(MB===undefined&&!MBL){MBL=1;
+      call({a:'smtpinfo',token:TOK}).then(j=>{MB=j.smtp||null}).catch(()=>{MB=null})
+        .finally(()=>{MBL=0;if(me&&tab=='set')frame()})}
+    /* keep the old "sent through our mail service" note truthful once a mailbox is connected */
+    if(MB)document.querySelectorAll('#v p.mu').forEach(p=>{
+      if(/through our mail service/i.test(p.textContent))
+        p.textContent='Payslips are sent from '+MB.user+' (your own mailbox) under the name "'+C().venue+'". When staff reply, it goes to the reply-to address above, or to '+MB.user+' if that is blank. Staff need a personal email on their record.'})}};
+
+/* ---------- Settings: payslip mailbox (owner only; the password never comes back to the browser) ---------- */
+const bad=e=>alert(e&&e.message?e.message:String(e));
+function mbCard(){
+  const head=`<div class=card style="margin-top:12px"><b>Send payslips from your own email</b>`;
+  if(MB===undefined)return head+`<p class=mu style="margin:6px 0">Loading…</p></div>`;
+  if(MB)return head+`<p class=mu style="margin:6px 0">Connected. Payslips are sent from <b>${esc(MB.user)}</b> (${esc(MB.host)}, port ${esc(MB.port)}).</p>
+  <div class=f><span>Send a test to</span><input id=mt type=email placeholder="you@example.com"><button class="s sm" onclick="tMbTest()">Test</button></div>
+  <p style="margin-top:10px"><button class="s sm" onclick="tMbDel()">Remove mailbox</button></p></div>`;
+  return head+`<p class=mu style="margin:6px 0">Connect your own mailbox so payslips arrive from your address. Use an <b>app password</b>, not your normal password. Gmail: turn on 2-step verification, then create an app password in your Google account. Outlook / Hotmail: Security &gt; App passwords. Your password is stored encrypted on the server.</p>
+  <div class=f><span>Provider</span><select onchange="tMbPreset(this.value)"><option value="">Choose…</option><option value=g>Gmail</option><option value=o>Outlook / Hotmail</option><option value=y>Yahoo</option><option value=x>Other / own domain</option></select></div>
+  <div class=f><span>Mail server</span><input id=mh placeholder="smtp.gmail.com" autocomplete=off></div>
+  <div class=f><span>Port (465 or 587)</span><input id=mp type=number value=465></div>
+  <div class=f><span>Email address</span><input id=mu type=email placeholder="you@gmail.com" autocomplete=off></div>
+  <div class=f><span>App password</span><input id=mw type=password autocomplete=new-password></div>
+  <p style="margin-top:10px"><button onclick="tMbSave()">Save &amp; check</button></p></div>`}
+window.tMbPreset=v=>{
+  const p={g:['smtp.gmail.com',465],o:['smtp-mail.outlook.com',587],y:['smtp.mail.yahoo.com',465]}[v];
+  if(p){$('#mh').value=p[0];$('#mp').value=p[1]}};
+window.tMbSave=async()=>{
+  const host=$('#mh').value.trim(),port=+$('#mp').value,user=$('#mu').value.trim(),pass=$('#mw').value;
+  if(!host||!port||!user||!pass)return toast('Fill in every box');
+  toast('Checking your mailbox…');
+  try{await call({a:'smtpset',token:TOK,host,port,user,pass});MB={host,port,user};toast('Mailbox connected');frame()}
+  catch(e){bad(e)}};
+window.tMbTest=async()=>{
+  const to=$('#mt').value.trim();if(!to)return toast('Enter an email to send the test to');
+  toast('Sending test…');
+  try{await call({a:'smtptest',token:TOK,to});toast('Test sent. Check that inbox')}catch(e){bad(e)}};
+window.tMbDel=async()=>{
+  if(!confirm('Remove this mailbox? Payslips will stop sending from it.'))return;
+  try{await call({a:'smtpset',token:TOK,clear:1});MB=null;toast('Mailbox removed');frame()}catch(e){bad(e)}};
 
 const S0=V.set;
 V.set=function(){
   return S0().replace('?clock=','?b='+BIZ+'&amp;clock=')+
+  (me&&me.owner?mbCard():'')+
   `<div class=card style="margin-top:12px"><b>Owner &amp; Manager PINs</b><p class=mu style="margin:4px 0">6 digits each. Change both when you first sign in.</p>
   <div class=f><span>Owner PIN</span><input id=po type=password inputmode=numeric maxlength=6 placeholder="new 6 digits"><button class="s sm" onclick="tPin('owner','po')">Change</button></div>
   <div class=f><span>Manager PIN</span><input id=pm type=password inputmode=numeric maxlength=6 placeholder="new 6 digits"><button class="s sm" onclick="tPin('manager','pm')">Change</button></div></div>`};
