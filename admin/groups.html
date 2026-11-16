@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>CBS Employee Management: Groups and plans (admin)</title>
+<style>
+:root{--bg:#f3f5f7;--card:#fff;--ink:#17202b;--mute:#5d6b7a;--line:#d9e0e6;--acc:#0b6b5c;--acc-ink:#fff;--bad:#b3261e}
+@media(prefers-color-scheme:dark){:root:not([data-theme=light]){--bg:#12181e;--card:#1b242c;--ink:#e8edf1;--mute:#9aa8b5;--line:#2b3742;--acc:#35b9a3;--acc-ink:#07201b;--bad:#ff8a80}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.45 system-ui,"Segoe UI",sans-serif}
+main{max-width:920px;margin:0 auto;padding:20px 16px 60px}
+h1{font-size:1.4rem;margin:0 0 4px}h2{font-size:1.05rem;margin:0 0 12px}
+input,select,button{font:inherit;color:inherit}
+input,select{padding:9px 11px;border:1px solid var(--line);border-radius:8px;background:var(--card);max-width:100%}
+button{padding:9px 14px;border:1px solid var(--line);border-radius:8px;background:var(--card);cursor:pointer}
+button.p{background:var(--acc);color:var(--acc-ink);border-color:var(--acc);font-weight:600}
+:focus-visible{outline:3px solid var(--acc);outline-offset:2px}
+.box{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:18px;margin-top:16px}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;padding:8px 0;border-top:1px solid var(--line)}
+.row:first-of-type{border-top:0}.row b{flex:1 1 180px}
+.mute{color:var(--mute);font-size:.9rem}.err{color:var(--bad)}
+.key{margin-top:12px;padding:12px;border:2px dashed var(--acc);border-radius:8px;font:600 1.05rem ui-monospace,Consolas,monospace;word-break:break-all}
+</style>
+</head>
+<body>
+<main>
+<h1>Groups and plans</h1>
+<p class="mute">A group is one client who owns several businesses. Create the group, link the businesses, then give the client the owner key and the link to <code>/owner/</code>. Each business also gets a plan here: which features it has, its limits, and when its subscription ends.</p>
+
+<div class="box">
+  <label for="ak" class="mute">Admin key</label><br>
+  <input id="ak" type="password" style="width:min(380px,100%)" autocomplete="off">
+  <button class="p" id="load">Load</button>
+  <div class="err" id="err" role="alert"></div>
+</div>
+
+<div class="box" id="newbox" hidden>
+  <h2>New group</h2>
+  <input id="gn" placeholder="Group name, e.g. Smith Group">
+  <input id="gi" placeholder="Group id, e.g. smith-group">
+  <button class="p" id="mk">Create group</button>
+  <div id="made"></div>
+</div>
+<div class="box" id="gbox" hidden><h2>Groups</h2><div id="groups"></div></div>
+<div class="box" id="bbox" hidden><h2>Businesses</h2><div id="biz"></div></div>
+</main>
+
+<script>
+const API = 'https://hrnrmojaaxyfmdnmsokc.supabase.co/functions/v1/cbs-biz';
+const $ = (i) => document.getElementById(i);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+let orgs = [];
+
+const CHK = [
+  ['tax', 'PAYE and NI estimate'], ['pension', 'Pension estimate'], ['payslips', 'Payslips (PDF and email)'],
+  ['payroll_files', 'Bank, PAYE and pension files'], ['own_mailbox', 'Own mailbox for emails'], ['backup', 'Automatic backup'],
+  ['nfc', 'NFC clock-in'], ['geo', 'Location check'], ['checks', 'Compliance alerts'], ['owner_access', 'Owner dashboard'],
+];
+const NUM = [['max_departments', 'Max departments (0 = none)'], ['max_employees', 'Max staff'], ['max_devices', 'Max devices']];
+const ON = { tax: true, pension: true, payslips: true, payroll_files: true, own_mailbox: true, backup: true, nfc: true, geo: true, checks: true, owner_access: true, max_departments: null, max_employees: null, max_devices: null };
+const PRESETS = {
+  starter:  { ...ON, tax: false, pension: false, payslips: false, payroll_files: false, own_mailbox: false, backup: false, nfc: false, geo: false, owner_access: false, max_departments: 3, max_employees: 10, max_devices: 2 },
+  standard: { ...ON, payroll_files: false, max_employees: 50, max_devices: 5 },
+  pro:      { ...ON },
+};
+const feat = (f) => ({ ...ON, ...Object.fromEntries(Object.entries(f || {}).filter(([k]) => k in ON)) });
+const fill = (row, f) => {
+  for (const [k] of CHK) row.querySelector(`[data-k="${k}"]`).checked = !!f[k];
+  for (const [k] of NUM) row.querySelector(`[data-k="${k}"]`).value = f[k] === null || f[k] === undefined ? '' : f[k];
+};
+
+async function call(a, body) {
+  const r = await fetch(API, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ a, admin: $('ak').value.trim(), ...body }) });
+  const j = await r.json().catch(() => ({ error: 'Bad response from server' }));
+  if (!r.ok || j.error) throw new Error(j.error || 'Request failed');
+  return j;
+}
+const keyBox = (label, k) => `<div class="key">${esc(label)}: ${esc(k)}</div><p class="mute">Copy this now. It is stored hashed and cannot be shown again.</p>`;
+
+async function refresh() {
+  $('err').textContent = '';
+  try {
+    orgs = (await call('orglist')).orgs;
+    const biz = (await call('list')).list;
+    $('newbox').hidden = $('gbox').hidden = $('bbox').hidden = false;
+    $('groups').innerHTML = orgs.length ? orgs.map((o) => `
+      <div class="row"><b>${esc(o.name)} <span class="mute">${esc(o.id)}${o.active ? '' : ' · suspended'}</span></b>
+      <button data-reset="${esc(o.id)}">New owner key</button>
+      <button data-active="${esc(o.id)}" data-to="${o.active ? 0 : 1}">${o.active ? 'Suspend' : 'Reactivate'}</button></div>`).join('') : '<p class="mute">No groups yet.</p>';
+    const opts = (sel) => '<option value="">(no group)</option>' + orgs.map((o) => `<option value="${esc(o.id)}"${o.id === sel ? ' selected' : ''}>${esc(o.name)}</option>`).join('');
+    $('biz').innerHTML = biz.map((b) => { const f = feat(b.features); const pl = PRESETS[b.plan] || b.plan === 'custom' ? b.plan : 'custom'; return `
+      <div class="row"><b>${esc(b.name)} <span class="mute">${esc(b.id)}${b.active ? '' : ' · disabled'}</span></b>
+      <select data-sel="${esc(b.id)}" aria-label="Group for ${esc(b.name)}">${opts(b.org_id)}</select>
+      <button data-assign="${esc(b.id)}">Save group</button>
+      <div style="flex-basis:100%;display:flex;gap:12px;flex-wrap:wrap;align-items:center">
+        <label>Plan <select data-k="plan">${['starter', 'standard', 'pro', 'custom'].map((x) => `<option value="${x}"${x === pl ? ' selected' : ''}>${x[0].toUpperCase() + x.slice(1)}</option>`).join('')}</select></label>
+        <label>Paid until <input type="date" data-k="paid" value="${b.paid_until ? esc(String(b.paid_until).slice(0, 10)) : ''}"></label>
+        ${CHK.map(([k, l]) => `<label><input type="checkbox" data-k="${k}" ${f[k] ? 'checked' : ''}> ${l}</label>`).join('')}
+        ${NUM.map(([k, l]) => `<label>${l} <input type="number" min="0" data-k="${k}" value="${f[k] === null || f[k] === undefined ? '' : f[k]}" placeholder="no limit" style="width:90px"></label>`).join('')}
+        <button class="p" data-saveplan="${esc(b.id)}">Save plan</button>
+        <button data-resetdev="${esc(b.id)}">Reset devices</button>
+      </div></div>`; }).join('');
+  } catch (e) { $('err').textContent = e.message; }
+}
+
+$('load').onclick = refresh;
+$('mk').onclick = async () => {
+  $('made').innerHTML = '';
+  try {
+    const j = await call('orgnew', { name: $('gn').value, id: $('gi').value });
+    $('made').innerHTML = keyBox('Owner key for ' + j.id, j.key); $('gn').value = $('gi').value = ''; refresh();
+  } catch (e) { $('made').innerHTML = '<p class="err">' + esc(e.message) + '</p>'; }
+};
+document.body.onclick = async (e) => {
+  const t = e.target.closest('button'); if (!t) return;
+  try {
+    if (t.dataset.reset) { if (!confirm('Replace the owner key for ' + t.dataset.reset + '? The old key stops working.')) return; const j = await call('orgkey', { org: t.dataset.reset }); $('made').innerHTML = keyBox('New owner key for ' + t.dataset.reset, j.key); window.scrollTo(0, $('newbox').offsetTop); }
+    else if (t.dataset.active) { await call('orgtoggle', { org: t.dataset.active, active: t.dataset.to === '1' }); refresh(); }
+    else if (t.dataset.saveplan) {
+      const r = t.closest('.row'); const q = (k) => r.querySelector(`[data-k="${k}"]`); const features = {};
+      for (const [k] of CHK) features[k] = q(k).checked;
+      for (const [k] of NUM) { const v = q(k).value.trim(); features[k] = v === '' ? null : Number(v); }
+      await call('setplan', { id: t.dataset.saveplan, plan: q('plan').value, paid_until: q('paid').value || null, features });
+      t.textContent = 'Saved'; setTimeout(() => (t.textContent = 'Save plan'), 1500);
+    }
+    else if (t.dataset.resetdev) { if (!confirm('Forget all registered devices for ' + t.dataset.resetdev + '? Each device registers again the next time someone signs in on it.')) return; await call('cleardevices', { id: t.dataset.resetdev }); t.textContent = 'Reset'; setTimeout(() => (t.textContent = 'Reset devices'), 1500); }
+    else if (t.dataset.assign) { const sel = document.querySelector('[data-sel="' + t.dataset.assign + '"]'); await call('assign', { id: t.dataset.assign, org: sel.value }); t.textContent = 'Saved'; setTimeout(() => (t.textContent = 'Save group'), 1500); }
+  } catch (er) { $('err').textContent = er.message; }
+};
+document.body.onchange = (e) => {
+  const t = e.target; if (t.dataset.k !== 'plan' || !PRESETS[t.value]) return;
+  fill(t.closest('.row'), PRESETS[t.value]);
+};
+</script>
+</body>
+</html>
