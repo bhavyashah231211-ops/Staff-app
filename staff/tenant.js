@@ -1,10 +1,11 @@
-/* CBS Employee Management (staff app): multi-tenant layer.
+/* CBS Employee Management (staff app): multi-tenant layer + plan permissions.
    Loaded as the LAST script in staff/index.html. It replaces local/Supabase-auth storage with the cbs-biz edge function.
    Business comes from the link: /staff/?b=<business-id>. Sign-in = staff key (once per device) + ID/PIN.
-   Settings (owner only): "Send payslips from your own email" (own mailbox, saved on the server)
-                          "Automatic backup" (every 30 minutes to a folder the owner chooses on their PC). */
+   The business's plan (which features are on, staff / department / device limits, subscription end) is sent by the
+   server at sign-in and on every sync, and this file applies it to the screens.
+   Settings (owner only): "Send payslips from your own email" and "Automatic backup" (when the plan includes them). */
 (()=>{
-const URL0='https://hrnrmojaaxyfmdnmsokc.supabase.co',ANON='';/* ANON optional: anon key of the NEW project */
+const URL0='https://hrnrmojaaxyfmdnmsokc.supabase.co',ANON='';/* ANON optional: anon key of the project */
 const FN=URL0+'/functions/v1/cbs-biz';
 document.title='CBS Employee Management';
 const P=new URLSearchParams(location.search);
@@ -18,18 +19,32 @@ let BK={h:null,last:0,need:false,err:'',busy:0};/* BK.h = the backup folder the 
 /* lets the main page know a session is active, so auto-sync runs */
 window.cbsLive=()=>!!TOK;
 
+/* ---------- plan (sent by the server) ---------- */
+const DEVK='cbs_dev';
+const devId=()=>{try{let d=localStorage[DEVK];if(!d){d=(window.crypto&&crypto.randomUUID)?crypto.randomUUID():String(Date.now())+Math.random().toString(36).slice(2);localStorage[DEVK]=d}return d}catch(e){return ''}};
+const ALLF={payslips:1,payroll_files:1,own_mailbox:1,backup:1,tax:1,pension:1,nfc:1,geo:1,checks:1,owner_access:1,max_departments:null,max_employees:null,max_devices:null};
+let FEAT=null,PAID='';
+const F=()=>FEAT||ALLF;
+function setPlan(j){if(j&&j.features){FEAT={...ALLF,...j.features};PAID=j.paid_until||''}}
+/* switch off the features the plan does not include, and trim departments to the plan's limit */
+function enforce(){const f=F(),c=D.cfg;if(!c)return;c.feat=c.feat||{};
+  ['tax','pension','nfc','geo','checks'].forEach(k=>{if(!f[k])c.feat[k]=0});
+  if(f.max_departments!==null&&f.max_departments!==undefined&&Array.isArray(c.depts)&&c.depts.length>f.max_departments)c.depts=c.depts.slice(0,f.max_departments)}
+
 /* never show another business's cached data */
 const blank=()=>({cfg:{...CFG0,code:BIZ,sb:{on:0,url:'',key:''}},rows:[]});
 if(localStorage.cbs_tenant!==BIZ)localStorage.removeItem(LS);
 localStorage.cbs_tenant=BIZ;
 D=blank();
 
+function lockScreen(msg){A(`<div class=lgn>${brand(1)}<h2 style="text-align:center">Subscription ended</h2><p class=mu style="text-align:center">${esc(msg||'Please contact your provider.')}</p></div>`)}
 async function call(body){
   let r,j={};
   try{r=await fetch(FN,{method:'POST',headers:{'Content-Type':'application/json',...(ANON?{apikey:ANON}:{})},body:JSON.stringify(body)})}
   catch(e){throw new Error('No connection')}
   try{j=await r.json()}catch(e){}
   if(!r.ok){
+    if(j.code==='expired'){TOK=null;me=null;lockScreen(j.error);throw new Error(j.error)}
     if(r.status==401&&TOK){TOK=null;me=null;toast('Session expired, sign in again');login()}
     throw new Error(j.error||'Error '+r.status)}
   return j}
@@ -38,10 +53,12 @@ async function call(body){
 initSB=function(){sb=null};
 pull=async function(){
   const j=await call({a:'pull',token:TOK});
+  setPlan(j);
   D.rows=j.rows.map(x=>({...x.data,id:x.id,t:x.tbl}));
   const c=R('cfg')[0];
   D.cfg={...CFG0,...(c?c.cfg:D.cfg),code:BIZ,sb:{on:0,url:'',key:''}};
   if(!c&&NAME)D.cfg.venue=NAME;
+  enforce();
   save()};
 put=function(r){
   D.rows=D.rows.filter(x=>x.id!=r.id);D.rows.push(r);save();
@@ -71,12 +88,39 @@ window.tLogin=async()=>{
   if(role=='s'&&!/^\d{4}$/.test(id))return toast('ID is 4 digits');
   if(!/^\d{6}$/.test(pin))return toast('PIN is 6 digits');
   try{
-    const j=await call({a:'login',b:BIZ,key:localStorage[KEYK],role,id,pin});
-    TOK=j.token;NAME=j.name;MB=undefined;await pull();start(j.user,0);bkInit()}
+    const j=await call({a:'login',b:BIZ,key:localStorage[KEYK],role,id,pin,device:devId()});
+    TOK=j.token;NAME=j.name;MB=undefined;setPlan(j);await pull();start(j.user,0);if(F().backup)bkInit()}
   catch(e){
     if(/staff key/i.test(e.message)){localStorage.removeItem(KEYK);toast(e.message);return keyScreen()}
+    if(/Device limit/i.test(e.message)){alert(e.message);return}
     toast(e.message)}};
-out=function(){TOK=null;me=null;INFO=null;MB=undefined;BK={h:null,last:0,need:false,err:'',busy:0};D=blank();localStorage.removeItem(LS);login()};
+out=function(){TOK=null;me=null;INFO=null;MB=undefined;FEAT=null;PAID='';BK={h:null,last:0,need:false,err:'',busy:0};D=blank();localStorage.removeItem(LS);login()};
+
+/* ---------- plan applied to the screens ---------- */
+const hide=el=>{if(el)el.style.display='none'};
+function planNote(){
+  const top=$('.top');const old=$('#plan-note');if(old)old.remove();
+  if(!top||!PAID)return;
+  const days=Math.ceil((new Date(PAID).getTime()-Date.now())/864e5);
+  if(days>7)return;
+  const n=document.createElement('span');n.id='plan-note';n.className='mu';n.style.color='var(--ac2)';
+  n.textContent=days>=0?'Subscription ends '+new Date(PAID).toLocaleDateString('en-GB')+' ('+days+' day'+(days==1?'':'s')+' left)':'Subscription overdue. Please renew';
+  top.insertBefore(n,top.children[1]||null)}
+function planTrim(){
+  const f=F();
+  document.querySelectorAll('#v .card').forEach(c=>{
+    const b=c.querySelector(':scope>b'),t=b?b.textContent:'';
+    if(/^Departments/.test(t)&&f.max_departments===0)c.remove();
+    if(/^Payroll files/.test(t)&&!f.payroll_files)c.remove();
+    if(/^Payslip emails/.test(t)&&!f.payslips)c.remove();
+    if(/^NFC tag/.test(t)&&!f.nfc)c.remove();
+    if(/^PAYE, NI/.test(t)&&!f.tax&&!f.pension)c.remove();
+    if(/^Features/.test(t))c.querySelectorAll('.f').forEach(row=>{const s=row.textContent;
+      if((/NFC clock-in/.test(s)&&!f.nfc)||(/Location check|Venue latitude|Venue longitude|Radius/.test(s)&&!f.geo)||(/Tax \/ NI estimate/.test(s)&&!f.tax)||(/Pension estimate/.test(s)&&!f.pension)||(/Compliance alerts/.test(s)&&!f.checks))row.remove()})});
+  if(!f.payslips){
+    document.querySelectorAll('#v button').forEach(b=>{if(/fin\(\)/.test(b.getAttribute('onclick')||''))b.remove()});
+    const h=[...document.querySelectorAll('#v h2')].find(x=>/^Payslips$/.test(x.textContent.trim()));
+    if(h){const n=h.nextElementSibling;h.remove();if(n&&n.classList.contains('card'))n.remove()}}}
 
 /* Owner/Manager: Settings is owner-only; hide cloud/demo bits that don't apply */
 const F0=frame;
@@ -95,14 +139,29 @@ frame=function(){
     if(/^Backup/.test(t))c.querySelectorAll('button,input').forEach(x=>{if(/^(Import|Reset demo)/.test(x.textContent)||x.id=='imp')x.remove()});
     if(/^Venue/.test(t))c.querySelectorAll('.f').forEach(f=>{if(/^(Login email domain|Venue code)/.test(f.textContent))f.remove()})});
   /* owner on Settings: load the saved-mailbox status once, then redraw */
-  if(me.owner&&tab=='set'){
+  if(me.owner&&tab=='set'&&F().own_mailbox){
     if(MB===undefined&&!MBL){MBL=1;
       call({a:'smtpinfo',token:TOK}).then(j=>{MB=j.smtp||null}).catch(()=>{MB=null})
         .finally(()=>{MBL=0;if(me&&tab=='set')frame()})}
     /* keep the old "sent through our mail service" note truthful once a mailbox is connected */
     if(MB)document.querySelectorAll('#v p.mu').forEach(p=>{
       if(/through our mail service/i.test(p.textContent))
-        p.textContent='Payslips are sent from '+MB.user+' (your own mailbox) under the name "'+C().venue+'". When staff reply, it goes to the reply-to address above, or to '+MB.user+' if that is blank. Staff need a personal email on their record.'})}};
+        p.textContent='Payslips are sent from '+MB.user+' (your own mailbox) under the name "'+C().venue+'". When staff reply, it goes to the reply-to address above, or to '+MB.user+' if that is blank. Staff need a personal email on their record.'})}
+  planTrim();planNote()};
+
+/* staff form: hide what the plan does not include (inputs stay in the page so Save keeps working) */
+const ED0=ed;
+ed=function(id){ED0(id);const f=F();
+  if(f.max_departments===0){const s=$('#e_dept');if(s)hide(s.closest('.f'))}
+  if(!f.payroll_files){['bkn','bsc','bac'].forEach(k=>{const e=$('#e_'+k);if(e)hide(e.closest('.f'))})}};
+const ES0=es;
+es=async function(id){const f=F();
+  if(f.max_employees&&!staff().some(s=>s.id==id)&&staff().length>=f.max_employees){toast('Your plan allows '+f.max_employees+' staff');return}
+  return ES0(id)};
+const DA0=deptAdd;
+deptAdd=function(){const f=F();
+  if(f.max_departments!==null&&f.max_departments!==undefined&&DP().length>=f.max_departments){toast('Your plan allows '+f.max_departments+' departments');return}
+  return DA0()};
 
 /* ---------- Settings: payslip mailbox (owner only; the password never comes back to the browser) ---------- */
 const bad=e=>alert(e&&e.message?e.message:String(e));
@@ -168,7 +227,7 @@ async function bkRun(manual){
     if(manual)toast('Backup saved')}
   catch(e){BK.err='Backup failed: '+(e&&e.message?e.message:e)}
   finally{BK.busy=0;bkUi()}}
-function bkTick(){if(!TOK||!me||!me.owner||!BK.h||BK.busy)return;if(Date.now()-BK.last<BKMS)return;bkRun(0)}
+function bkTick(){if(!TOK||!me||!me.owner||!BK.h||BK.busy||!F().backup)return;if(Date.now()-BK.last<BKMS)return;bkRun(0)}
 function bkStatus(){
   if(!bkOK())return 'This browser cannot save to a folder automatically. Use Chrome or Edge on a computer. You can still download a backup file with the button below.';
   if(!BK.h)return 'Automatic backup is <b>off</b>. Choose a folder to switch it on.';
@@ -210,7 +269,7 @@ window.tBkRestore=()=>{
 const S0=V.set;
 V.set=function(){
   return S0().replace('?clock=','?b='+BIZ+'&amp;clock=')+
-  (me&&me.owner?mbCard()+bkCard():'')+
+  (me&&me.owner?(F().own_mailbox?mbCard():'')+(F().backup?bkCard():''):'')+
   `<div class=card style="margin-top:12px"><b>Owner &amp; Manager PINs</b><p class=mu style="margin:4px 0">6 digits each. Change both when you first sign in.</p>
   <div class=f><span>Owner PIN</span><input id=po type=password inputmode=numeric maxlength=6 placeholder="new 6 digits"><button class="s sm" onclick="tPin('owner','po')">Change</button></div>
   <div class=f><span>Manager PIN</span><input id=pm type=password inputmode=numeric maxlength=6 placeholder="new 6 digits"><button class="s sm" onclick="tPin('manager','pm')">Change</button></div></div>`};
