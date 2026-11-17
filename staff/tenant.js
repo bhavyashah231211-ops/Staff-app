@@ -6,7 +6,10 @@
    Settings (owner only): "Send payslips from your own email" and "Automatic backup" (when the plan includes them).
    TAP TO CLOCK: staff tick "Remember me on this phone" at sign-in. The server returns a long-lived phone token, kept in
    localStorage. When the NFC tag opens /staff/?b=<id>&clock=<id>, the app sends that token to the server (action "tap"),
-   which clocks the person in or out and returns a confirmation. No sign-in screen. Sign out forgets the phone. */
+   which clocks the person in or out and returns a confirmation. No sign-in screen. Sign out forgets the phone.
+   TAG ONLY + LOCATION: the owner can switch on "Staff clock with the tag only" (hides the clock button) and the
+   location check (venue latitude, longitude, radius). Staff clocking goes through the server action "clock" or "tap",
+   which checks the phone's location. Managers and the owner are exempt. */
 (()=>{
 const URL0='https://hrnrmojaaxyfmdnmsokc.supabase.co',ANON='';/* ANON optional: anon key of the project */
 const FN=URL0+'/functions/v1/cbs-biz';
@@ -107,6 +110,22 @@ window.tLogin=async()=>{
     toast(e.message)}};
 out=function(){TOK=null;me=null;INFO=null;MB=undefined;FEAT=null;PAID='';TAP=null;SKIPTAP=false;BK={h:null,last:0,need:false,err:'',busy:0};D=blank();localStorage.removeItem(LS);localStorage.removeItem(DTK);login()};
 
+/* ---------- helpers: tag-only rule and phone location ---------- */
+const tagOnly=()=>!!(C().tagOnly&&F().nfc);
+function getPos(){return new Promise((res,rej)=>{
+  if(!navigator.geolocation)return rej(new Error('This phone cannot share its location'));
+  navigator.geolocation.getCurrentPosition(p=>res(p.coords),
+    e=>rej(new Error(e&&e.code===1?'Location is blocked for this site. Allow location in your browser settings, then try again.':'Could not get your location. Move to an open area and try again.')),
+    {enableHighAccuracy:true,timeout:15000,maximumAge:0})})}
+/* sends the request; if the server says a location is needed (code "geo"), reads the phone's position and sends it again */
+async function withGeo(body,onGeo){
+  try{return await call(body)}
+  catch(e){
+    if(e.code!=='geo')throw e;
+    if(onGeo)onGeo();
+    const p=await getPos();
+    return await call({...body,lat:p.latitude,lng:p.longitude})}}
+
 /* ---------- tap to clock (remembered phone) ----------
    Returns true when the screen has been handled here, false when the normal sign-in screen should be shown instead. */
 async function tapFlow(){
@@ -114,7 +133,7 @@ async function tapFlow(){
   sessionStorage.removeItem('cbclock');
   A(`<div class=lgn><h2 style="text-align:center">Clocking…</h2></div>`);
   try{
-    const j=await call({a:'tap',b:BIZ,dtoken:localStorage[DTK]});
+    const j=await withGeo({a:'tap',b:BIZ,dtoken:localStorage[DTK]},()=>A(`<div class=lgn><h2 style="text-align:center">Checking your location…</h2></div>`));
     TAP=j;
     C().venue=j.name;
     const t=new Date(j.ts).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}),
@@ -189,7 +208,34 @@ frame=function(){
     if(MB)document.querySelectorAll('#v p.mu').forEach(p=>{
       if(/through our mail service/i.test(p.textContent))
         p.textContent='Payslips are sent from '+MB.user+' (your own mailbox) under the name "'+C().venue+'". When staff reply, it goes to the reply-to address above, or to '+MB.user+' if that is blank. Staff need a personal email on their record.'})}
-  planTrim();planNote()};
+  planTrim();planNote();
+  if(me.owner&&tab=='set')setExtras()};
+
+/* Settings > Features: add the tag-only switch and a "use my current location" button next to the venue position boxes */
+function setExtras(){
+  const card=[...document.querySelectorAll('#v .card')].find(c=>{const b=c.querySelector(':scope>b');return b&&/^Features/.test(b.textContent)});
+  if(!card)return;
+  const rows=[...card.querySelectorAll('.f')];
+  const nfcRow=rows.find(r=>/^NFC clock-in/.test(r.textContent.trim()));
+  if(nfcRow&&!$('#tagonly')){
+    const d=document.createElement('div');d.className='f';d.id='tagonly';
+    d.innerHTML='<span>Staff clock with the tag only (hides the clock button)</span><input type=checkbox '+(C().tagOnly?'checked':'')+' onchange="tTagOnly(this.checked)">';
+    nfcRow.after(d)}
+  const radRow=rows.find(r=>/^Radius/.test(r.textContent.trim()));
+  if(radRow&&!$('#geohere')){
+    const d=document.createElement('div');d.className='f';d.id='geohere';
+    d.innerHTML='<span>Set venue position</span><button class="s sm" onclick="tGeoHere()">Use my current location</button>';
+    radRow.after(d)}}
+window.tTagOnly=on=>{C().tagOnly=on?1:0;sv()};
+window.tGeoHere=()=>{
+  if(!navigator.geolocation)return toast('This device cannot share its location');
+  toast('Getting your location…');
+  navigator.geolocation.getCurrentPosition(p=>{
+    const g=C().geo=C().geo||{lat:0,lng:0,r:150};
+    g.lat=+p.coords.latitude.toFixed(6);g.lng=+p.coords.longitude.toFixed(6);if(!(+g.r>0))g.r=150;
+    sv();toast('Venue position saved (accurate to about '+Math.round(p.coords.accuracy)+' m). Tick Location check to use it')},
+  e=>toast(e&&e.code===1?'Location is blocked for this site. Allow it in browser settings':'Could not get your location'),
+  {enableHighAccuracy:true,timeout:15000,maximumAge:0})};
 
 /* staff form: hide what the plan does not include (inputs stay in the page so Save keeps working) */
 const ED0=ed;
@@ -318,6 +364,31 @@ V.set=function(){
 window.tPin=async(w,id)=>{
   const p=$('#'+id).value.trim();if(!/^\d{6}$/.test(p))return toast('PIN must be 6 digits');
   try{await call({a:'setpin',token:TOK,which:w,pin:p});$('#'+id).value='';toast('PIN changed')}catch(e){toast(e.message)}};
+
+/* ---------- staff clocking goes through the server (tag-only rule + location check) ---------- */
+const CK0=V.clock;
+V.clock=function(){
+  let h=CK0();
+  /* tag-only: the big button becomes a notice */
+  if(tagOnly()&&!isM())
+    h=h.replace(/<div class="tap([^"]*)" onclick="clk\('manual'\)"><div>(CLOCK IN|CLOCK OUT)<\/div><\/div>/,
+      (m,c,w)=>`<div class="tap${c}" style="cursor:default"><div style="font-size:15px;line-height:1.3;padding:0 26px">TAP THE TAG<br>TO ${w}</div></div>`);
+  /* in-browser tag scanning only exists on Android Chrome, so hide the button elsewhere (iPhone) */
+  if(!('NDEFReader' in window))
+    h=h.replace(/<p style="margin-top:12px"><button class=s onclick=nfc\(\)>[^<]*<\/button><\/p>/,'');
+  return h};
+const CLK0=clk;
+clk=async function(by,sid){
+  sid=sid||(me&&me.id);
+  /* managers and the owner keep the original behaviour (clocking other people from the Live tab, no rules) */
+  if(!me||isM()||sid!==me.id)return CLK0(by,sid);
+  if(by!=='nfc'&&tagOnly()){toast('Please tap the NFC tag to clock in or out');return}
+  try{
+    toast('Clocking…');
+    const j=await withGeo({a:'clock',token:TOK,by:by==='nfc'?'nfc':'manual'});
+    await pull();frame();
+    toast(j.stale?'Clocked in. Your last shift was never clocked out, please tell your manager':j.dup?'Already clocked '+j.type+' at '+ftm(j.ts):'Clocked '+j.type+' '+ftm(j.ts))}
+  catch(e){toast(e.message)}};
 
 setInterval(bkTick,60e3);
 login();
