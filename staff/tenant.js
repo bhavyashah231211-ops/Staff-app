@@ -3,7 +3,10 @@
    Business comes from the link: /staff/?b=<business-id>. Sign-in = staff key (once per device) + ID/PIN.
    The business's plan (which features are on, staff / department / device limits, subscription end) is sent by the
    server at sign-in and on every sync, and this file applies it to the screens.
-   Settings (owner only): "Send payslips from your own email" and "Automatic backup" (when the plan includes them). */
+   Settings (owner only): "Send payslips from your own email" and "Automatic backup" (when the plan includes them).
+   TAP TO CLOCK: staff tick "Remember me on this phone" at sign-in. The server returns a long-lived phone token, kept in
+   localStorage. When the NFC tag opens /staff/?b=<id>&clock=<id>, the app sends that token to the server (action "tap"),
+   which clocks the person in or out and returns a confirmation. No sign-in screen. Sign out forgets the phone. */
 (()=>{
 const URL0='https://hrnrmojaaxyfmdnmsokc.supabase.co',ANON='';/* ANON optional: anon key of the project */
 const FN=URL0+'/functions/v1/cbs-biz';
@@ -12,7 +15,9 @@ const P=new URLSearchParams(location.search);
 const BIZ=(P.get('b')||localStorage.cbs_biz||'').toLowerCase().replace(/[^a-z0-9-]/g,'');
 if(P.get('b')&&BIZ)localStorage.cbs_biz=BIZ;
 const KEYK='cbs_key_'+BIZ;
+const DTK='cbs_dtok_'+BIZ;/* remembered-phone token (tap to clock) */
 let TOK=null,INFO=null,NAME='';
+let TAP=null,SKIPTAP=false;/* TAP = last tap result; SKIPTAP = go straight to the normal sign-in screen */
 let MB,MBL=0;/* MB: undefined = not loaded yet, null = no mailbox saved, object = saved mailbox (never contains the password) */
 const BKMS=30*60e3,KEEP=200,PFX='cbsystem-'+BIZ+'-',BKK='cbs_bk_'+BIZ;
 let BK={h:null,last:0,need:false,err:'',busy:0};/* BK.h = the backup folder the owner chose; BK.need = browser wants the owner to click once to allow it again */
@@ -44,9 +49,9 @@ async function call(body){
   catch(e){throw new Error('No connection')}
   try{j=await r.json()}catch(e){}
   if(!r.ok){
-    if(j.code==='expired'){TOK=null;me=null;lockScreen(j.error);throw new Error(j.error)}
+    if(j.code==='expired'){TOK=null;me=null;lockScreen(j.error);const x=new Error(j.error);x.code='expired';throw x}
     if(r.status==401&&TOK){TOK=null;me=null;toast('Session expired, sign in again');login()}
-    throw new Error(j.error||'Error '+r.status)}
+    const er=new Error(j.error||'Error '+r.status);er.code=j.code;er.status=r.status;throw er}
   return j}
 
 /* storage */
@@ -76,25 +81,62 @@ function keyScreen(){
   A(`<div class=lgn>${brand(1)}<h2 style="text-align:center">Staff key</h2><p class=mu style="text-align:center">Enter the staff key from your manager. You only do this once on this device.</p><input id=sk placeholder="Staff key" autocapitalize=characters autocomplete=off><button onclick="tSaveKey()">Continue</button></div>`)}
 login=function(){
   if(!BIZ)return A(`<div class=lgn><h2>No business selected</h2><p class=mu>Open the staff link your supplier sent you. It ends in <b>?b=your-business</b>.</p></div>`);
+  /* tag tap on a remembered phone: clock straight away, no sign-in screen */
+  if(!SKIPTAP&&localStorage[DTK]&&sessionStorage.cbclock===BIZ){
+    tapFlow().then(handled=>{if(!handled)login()});return}
   if(INFO===null){
     INFO={};
     call({a:'info',b:BIZ}).then(j=>{INFO=j;NAME=j.name;C().venue=j.name;C().logo=j.logo||'';if($('#lid')&&!$('#lid').value||$('#sk')&&!$('#sk').value)login()})
       .catch(e=>{INFO={err:1};toast(e.message)})}
   if(!localStorage[KEYK])return keyScreen();
-  A(`<div class=lgn>${brand(1)}<select id=lr onchange="$('#lid').style.display=this.value=='s'?'':'none'"><option value=s>Staff</option><option value=m>Manager</option><option value=o>Owner</option></select><input id=lid inputmode=numeric maxlength=4 placeholder="4-digit ID" autocomplete=username><input id=pw type=password inputmode=numeric maxlength=6 placeholder="6-digit PIN" autocomplete=current-password><button onclick="tLogin()">Sign in</button><a class=mu onclick="localStorage.removeItem('${KEYK}');login()">Change staff key</a></div>`)};
+  A(`<div class=lgn>${brand(1)}<select id=lr onchange="$('#lid').style.display=this.value=='s'?'':'none';$('#rml').style.display=this.value=='s'?'flex':'none'"><option value=s>Staff</option><option value=m>Manager</option><option value=o>Owner</option></select><input id=lid inputmode=numeric maxlength=4 placeholder="4-digit ID" autocomplete=username><input id=pw type=password inputmode=numeric maxlength=6 placeholder="6-digit PIN" autocomplete=current-password><label id=rml class=mu style="display:flex;gap:8px;align-items:center"><input id=rm type=checkbox checked style="width:auto;padding:0;margin:0"> Remember me on this phone (tap the tag to clock in and out)</label><button onclick="tLogin()">Sign in</button><a class=mu onclick="localStorage.removeItem('${KEYK}');login()">Change staff key</a></div>`)};
 window.tSaveKey=()=>{const k=$('#sk').value.trim().toUpperCase();if(k.length<20)return toast('Check the staff key');localStorage[KEYK]=k;login()};
 window.tLogin=async()=>{
   const role=$('#lr').value,id=$('#lid').value.trim(),pin=$('#pw').value;
   if(role=='s'&&!/^\d{4}$/.test(id))return toast('ID is 4 digits');
   if(!/^\d{6}$/.test(pin))return toast('PIN is 6 digits');
+  const remember=role=='s'&&!!($('#rm')&&$('#rm').checked);
   try{
-    const j=await call({a:'login',b:BIZ,key:localStorage[KEYK],role,id,pin,device:devId()});
+    const j=await call({a:'login',b:BIZ,key:localStorage[KEYK],role,id,pin,device:devId(),remember});
+    /* keep or clear the remembered-phone token for staff sign-ins (manager / owner sign-ins never touch it) */
+    if(j.dtoken)localStorage[DTK]=j.dtoken;else if(role=='s')localStorage.removeItem(DTK);
     TOK=j.token;NAME=j.name;MB=undefined;setPlan(j);await pull();start(j.user,0);if(F().backup)bkInit()}
   catch(e){
     if(/staff key/i.test(e.message)){localStorage.removeItem(KEYK);toast(e.message);return keyScreen()}
     if(/Device limit/i.test(e.message)){alert(e.message);return}
     toast(e.message)}};
-out=function(){TOK=null;me=null;INFO=null;MB=undefined;FEAT=null;PAID='';BK={h:null,last:0,need:false,err:'',busy:0};D=blank();localStorage.removeItem(LS);login()};
+out=function(){TOK=null;me=null;INFO=null;MB=undefined;FEAT=null;PAID='';TAP=null;SKIPTAP=false;BK={h:null,last:0,need:false,err:'',busy:0};D=blank();localStorage.removeItem(LS);localStorage.removeItem(DTK);login()};
+
+/* ---------- tap to clock (remembered phone) ----------
+   Returns true when the screen has been handled here, false when the normal sign-in screen should be shown instead. */
+async function tapFlow(){
+  /* the old "clock after sign-in" path must not fire as well, or one tap would toggle twice */
+  sessionStorage.removeItem('cbclock');
+  A(`<div class=lgn><h2 style="text-align:center">Clocking…</h2></div>`);
+  try{
+    const j=await call({a:'tap',b:BIZ,dtoken:localStorage[DTK]});
+    TAP=j;
+    C().venue=j.name;
+    const t=new Date(j.ts).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}),
+      nm=esc(((j.user&&j.user.name)||'').split(' ')[0]),isIn=j.type==='in',
+      bg=isIn?'radial-gradient(circle,#2dd4a0,#0f766e)':'radial-gradient(circle,#ff4560,#9f1239)',
+      ring=isIn?'#2dd4a022':'#ff456022';
+    if(navigator.vibrate)try{navigator.vibrate(isIn?[120]:[120,80,120])}catch(e){}
+    A(`<div class=lgn>${brand(1)}<div class=tap style="cursor:default;background:${bg};box-shadow:0 0 0 12px ${ring}"><div>${isIn?'CLOCKED IN':'CLOCKED OUT'}</div></div><p style="text-align:center;font-size:18px"><b>${nm}</b> · ${t}</p>${j.dup?'<p class=mu style="text-align:center">You tapped a moment ago, so nothing was changed.</p>':''}${j.stale?'<p style="text-align:center;color:var(--ac2)">Your previous shift was never clocked out. A new shift has started. Please tell your manager so the old one can be corrected.</p>':''}<button onclick="tOpen()">Open my app</button></div>`);
+    return true}
+  catch(e){
+    if(e.code==='expired')return true;/* the subscription lock screen is already showing */
+    if(e.code==='dev'||e.status===401){
+      /* the phone is no longer remembered (PIN changed, staff removed, devices cleared): sign in again, then clock */
+      localStorage.removeItem(DTK);sessionStorage.cbclock=BIZ;toast(e.message);return false}
+    A(`<div class=lgn><h2 style="text-align:center">Could not clock</h2><p class=mu style="text-align:center">${esc(e.message)}. Please try again.</p><button onclick="tTapRetry()">Try again</button><button class=s onclick="tTapSkip()">Sign in instead</button></div>`);
+    return true}}
+window.tTapRetry=()=>{sessionStorage.cbclock=BIZ;login()};
+window.tTapSkip=()=>{SKIPTAP=true;login()};
+window.tOpen=async()=>{
+  if(!TAP)return login();
+  try{TOK=TAP.token;MB=undefined;setPlan(TAP);await pull();start(TAP.user,0)}
+  catch(e){TOK=null;toast(e.message);SKIPTAP=true;login()}};
 
 /* ---------- plan applied to the screens ---------- */
 const hide=el=>{if(el)el.style.display='none'};
